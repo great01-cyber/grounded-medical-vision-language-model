@@ -1,0 +1,48 @@
+labels:
+  - Atelectasis
+  - Cardiomegaly
+  - Consolidation
+  - Edema
+  - Lung Opacity
+  - Pleural Effusion
+  - Pneumonia
+  - Pneumothorax
+
+data:
+  csv: data/synthetic/metadata.csv
+  image_size: 224
+  max_text_length: 64
+  batch_size: 4
+  num_workers: 0
+  train_frac: 0.70
+  val_frac: 0.10
+  temp_calib_frac: 0.05
+  conformal_calib_frac: 0.05
+  seed: 7
+
+model:
+  kind: cross_attention
+  vision_backbone: vit_small_patch16_224
+  text_backbone: microsoft/BiomedVLP-CXR-BERT-specialized
+  embed_dim: 256
+  num_heads: 8
+  dropout: 0.1
+  freeze_vision: true
+  freeze_text: true
+  lora_rank: 8
+  lora_alpha: 16
+
+train:
+  epochs: 2
+  lr: 0.0003
+  weight_decay: 0.0001
+  contrastive_weight: 0.2
+  grad_clip: 1.0
+  device: auto
+  out_dir: runs/cross_attention
+
+eval:
+  alpha: 0.10
+  confidence_threshold: 0.80
+  entropy_threshold: 0.55
+  ece_bins: 15
