@@ -6,12 +6,265 @@ MedVLM-Grounded is a research framework for investigating **trustworthy multimod
 
 The project studies whether medical vision-language models can combine chest X-ray images with textual or clinical information while providing predictions that are not only accurate, but also **calibrated, uncertainty-aware, spatially grounded, parameter-efficient, and capable of abstaining when confidence is insufficient**.
 
+These are extremely necessary in the medical field, as predictions alone from a black-box model cannot serve as a stand-alone basis on which clinicians base their diagnosis, especially when they are oblivious to the mechanism by which the model arrived at its prediction.
+
 Rather than treating medical image classification as a prediction-only problem, MedVLM-Grounded investigates the complete pathway from multimodal representation learning to reliability and evidence grounding.
+
+## Trustworthiness Components
+
+MedVLM-Grounded is designed to investigate models that are **calibrated, uncertainty-aware, spatially grounded, parameter-efficient, and capable of abstaining when confidence is insufficient**.
+
+### 1. Calibrated
+
+**Calibration** refers to how well a model's reported confidence corresponds to its actual reliability.
+
+For example, if a model makes 100 predictions with approximately **90% confidence**, a well-calibrated model should be correct on roughly 90 of those predictions.
+
+A model can achieve good classification accuracy while still being overconfident or underconfident.
+
+#### What We Implemented
+
+MedVLM-Grounded uses **temperature scaling** to calibrate the model's predicted probabilities.
+
+The original probability is:
+
+```math
+p = \sigma(z)
+```
+
+where $z$ is the model's raw logit.
+
+After temperature scaling:
+
+```math
+p_{calibrated} = \sigma\left(\frac{z}{T}\right)
+```
+
+where $T$ is learned using a separate temperature-calibration dataset.
+
+The process is:
+
+```text
+Raw Model Prediction
+        ↓
+Temperature Scaling
+        ↓
+Calibrated Probability
+```
+
+Calibration is evaluated using metrics including **Expected Calibration Error (ECE)** and **Brier Score**.
+
+---
+
+### 2. Uncertainty-Aware
+
+**Uncertainty awareness** refers to the model's ability to identify predictions for which the available evidence is ambiguous.
+
+For example:
+
+```text
+Pneumonia = 0.98
+```
+
+represents a much more decisive prediction than:
+
+```text
+Pneumonia = 0.51
+```
+
+#### What We Implemented
+
+MedVLM-Grounded uses **binary predictive entropy** as one measure of uncertainty:
+
+```math
+H(p) = -p\log(p) - (1-p)\log(1-p)
+```
+
+Probabilities close to `0.5` have higher entropy and therefore indicate greater predictive uncertainty.
+
+```text
+0.00 ─────────── 0.50 ─────────── 1.00
+ ↓                 ↓                 ↓
+More certain    Uncertain         More certain
+negative                          positive
+```
+
+The framework also includes **conformal prediction**, which can represent ambiguity using prediction sets such as:
+
+```text
+{Positive}
+```
+
+```text
+{Negative}
+```
+
+or:
+
+```text
+{Positive, Negative}
+```
+
+The last case indicates that the model cannot confidently distinguish between positive and negative under the conformal procedure.
+
+> Predictive entropy is an uncertainty signal and should not be interpreted as a complete measurement of all forms of model uncertainty.
+
+---
+
+### 3. Spatially Grounded
+
+**Spatial grounding** asks whether the visual evidence supporting a model's prediction is located in the relevant region of the medical image.
+
+For example, if the model predicts:
+
+```text
+Pleural Effusion
+```
+
+it should ideally identify evidence from the relevant region of the chest X-ray rather than an unrelated area.
+
+```text
+Chest X-ray
+     ↓
+Prediction
+     ↓
+Visual Attribution Map
+     ↓
+Compare with Reference Region
+     ↓
+Grounding Score
+```
+
+#### What We Implemented
+
+MedVLM-Grounded separates **visual explanation** from **grounding evaluation**.
+
+The framework supports attribution approaches such as **Integrated Gradients** and attention-based visualisation.
+
+The resulting evidence maps can then be compared with spatial reference annotations using metrics such as:
+
+- **Pointing Game** — checks whether the strongest model activation falls inside the annotated region.
+- **Energy Inside Ground-Truth Region** — measures how much attribution energy lies within the reference region.
+- **Intersection over Union (IoU)** — measures overlap between predicted and reference regions.
+
+Spatial annotations from **MS-CXR** are planned for the real-data grounding experiments.
+
+> A visually convincing heatmap is not automatically evidence of correct grounding. The highlighted region must be evaluated against reference annotations.
+
+---
+
+### 4. Parameter-Efficient
+
+**Parameter efficiency** refers to adapting a large pretrained model while updating substantially fewer parameters.
+
+Training every parameter of a large vision-language model can require considerable memory and computation.
+
+#### What We Implemented
+
+MedVLM-Grounded investigates **Low-Rank Adaptation (LoRA)** for parameter-efficient cross-attention.
+
+Instead of fully updating a large weight matrix $W$, LoRA freezes the original matrix and learns a smaller low-rank update:
+
+```math
+W' = W + \frac{\alpha}{r}BA
+```
+
+In the current implementation, LoRA is applied to the cross-attention **Query, Key, and Value (Q/K/V)** projections.
+
+The current parameter comparison is:
+
+| Model | Trainable Parameters |
+|---|---:|
+| Full Cross-Attention | 495,368 |
+| LoRA Cross-Attention | 310,280 |
+
+This corresponds to approximately:
+
+**37.4% fewer trainable parameters**
+
+for the LoRA cross-attention configuration.
+
+The real-data experiments will determine whether this reduction can be achieved while maintaining comparable predictive and reliability performance.
+
+> This reduction refers to **trainable parameters**, not total model parameters.
+
+---
+
+### 5. Capable of Abstaining When Confidence Is Insufficient
+
+**Abstention**, also known as **selective prediction**, allows the model to avoid making a prediction when its confidence is insufficient or its uncertainty is too high.
+
+Instead of forcing every case into:
+
+```text
+Positive
+```
+
+or:
+
+```text
+Negative
+```
+
+the model can also return:
+
+```text
+Abstain
+```
+
+#### What We Implemented
+
+MedVLM-Grounded combines confidence and uncertainty information to determine whether a prediction should be retained.
+
+Conceptually:
+
+```text
+Model Prediction
+       ↓
+Confidence + Uncertainty
+       ↓
+Sufficiently Reliable?
+       ↓
+   ┌───┴───┐
+  YES      NO
+   ↓        ↓
+PREDICT   ABSTAIN
+```
+
+For example:
+
+```text
+Pneumothorax
+Probability: 0.97
+Uncertainty: Low
+
+Decision: PREDICT
+```
+
+whereas:
+
+```text
+Pneumothorax
+Probability: 0.53
+Uncertainty: High
+
+Decision: ABSTAIN
+```
+
+The behaviour is evaluated using **risk-coverage analysis**.
+
+**Coverage** measures how many cases the model chooses to predict.
+
+**Risk** measures the error among those retained predictions.
+
+The objective is to investigate whether model error decreases as increasingly uncertain cases are rejected.
+
+> In selective prediction, abstention is not necessarily a failure. Correctly identifying cases for which the model lacks sufficient confidence is itself an important reliability behaviour.
 
 The framework compares three modelling strategies:
 
-1. **Contrastive vision-language learning**
-2. **Cross-attention multimodal fusion**
+1. **Contrastive vision-language learning** This trains an image encoder and a text encoder so that matching image–text pairs are close together in a shared embedding space, while mismatched pairs are pushed farther apart. Contrastive language Image Pre-training(CLIP) is the classic example: it learns visual concepts from large numbers of image–caption pairs rather than requiring fixed class labels(Ra).
+2. **Cross-attention multimodal fusion** Cross-attention allows information from one modality to selectively attend to information from another modality. For example, text tokens can act as queries while visual features provide keys and values. This lets the model learn relationships such as which image regions are relevant to particular words or concepts, rather than simply concatenating image and text features. Cross-attention has consequently become an important mechanism for information exchange in multimodal architectures
 3. **LoRA-adapted cross-attention**
 
 These models are evaluated within a common framework incorporating multilabel classification, temperature scaling, conformal prediction, selective prediction, explanation, and spatial grounding.
